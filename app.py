@@ -150,409 +150,295 @@ def normalize_text_general(text):
     return unicodedata.normalize('NFC', text)
 
 # --- PDF Parsers (HAPOALIM, LEUMI, DISCOUNT, CREDIT REPORT) ---
-# NOTE: The complex PDF parsing functions from the original script are included here.
-# They are assumed to be correct and tailored to specific document formats.
-# No logical changes were made to the parsers themselves.
 
-# --- HAPOALIM PARSER ---
-def extract_transactions_from_pdf_hapoalim(pdf_content_bytes, filename_for_logging="hapoalim_pdf"):
-    """Extracts Date and Balance from Hapoalim PDF based on line patterns."""
+# --- HAPOALIM PARSER (REPLACED) ---
+def extract_transactions_from_pdf_hapoalim(pdf_content_bytes, filename_for_logging):
     transactions = []
     try:
         doc = fitz.open(stream=pdf_content_bytes, filetype="pdf")
     except Exception as e:
-        logging.error(f"Hapoalim: Failed to open/process PDF {filename_for_logging}: {e}", exc_info=True)
-        return pd.DataFrame()
-
+        logging.error(f"Failed to open/process PDF {filename_for_logging}: {e}", exc_info=True)
+        return pd.DataFrame() # Return empty DataFrame on error
 
     date_pattern_end = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})\s*$")
     balance_pattern_start = re.compile(r"^\s*(₪?-?[\d,]+\.\d{2})")
 
-    logging.info(f"Starting Hapoalim PDF parsing for {filename_for_logging}")
+    for page in doc:
+        lines = page.get_text("text", sort=True).splitlines()
+        for line in lines:
+            original_line = line
+            line_normalized = normalize_text_general(line.strip())
+            if not line_normalized: continue
 
-    for page_num, page in enumerate(doc):
-        try:
-            lines = page.get_text("text", sort=True).splitlines()
-            for line_num, line_text in enumerate(lines):
-                original_line = line_text
-                line_normalized = normalize_text_general(original_line)
+            date_match = date_pattern_end.search(original_line)
+            if date_match:
+                date_str = date_match.group(1)
+                parsed_date = parse_date_general(date_str)
+                if not parsed_date: continue
 
-                if not line_normalized or len(line_normalized) < 10: continue
-
-                date_match = date_pattern_end.search(original_line)
-                if date_match:
-                    date_str = date_match.group(1)
-                    parsed_date = parse_date_general(date_str)
-
-                    if parsed_date:
-                        balance_match = balance_pattern_start.search(original_line)
-                        if balance_match:
-                            balance_str = balance_match.group(1)
-                            balance = clean_number_general(balance_str)
-
-                            if balance is not None:
-                                lower_line = line_normalized.lower()
-                                if "יתרה לסוף יום" in lower_line or "עובר ושב" in lower_line or "תנועות בחשבון" in lower_line or "עמוד" in lower_line or "סך הכל" in lower_line or "הודעה זו כוללת" in lower_line:
-                                    logging.debug(f"Hapoalim: Skipping potential header/footer/summary line: {original_line.strip()}")
-                                    continue
-
-                                transactions.append({
-                                    'Date': parsed_date,
-                                    'Balance': balance,
-                                })
-                                logging.debug(f"Hapoalim: Found transaction - Date: {parsed_date}, Balance: {balance}, Line: {original_line.strip()}")
-        except Exception as e:
-            logging.error(f"Hapoalim: Error processing line {line_num+1} on page {page_num+1}: {e}", exc_info=True)
-            continue
-
+                balance_match = balance_pattern_start.search(original_line)
+                if balance_match:
+                    balance_str = balance_match.group(1)
+                    balance = clean_number_general(balance_str)
+                    if balance is not None:
+                        transactions.append({
+                            'Date': parsed_date,
+                            'Balance': balance,
+                        })
     doc.close()
 
     if not transactions:
-        logging.warning(f"Hapoalim: No transactions found in {filename_for_logging}")
         return pd.DataFrame()
 
     df = pd.DataFrame(transactions)
     df['Date'] = pd.to_datetime(df['Date'])
-    df['Balance'] = pd.to_numeric(df['Balance'], errors='coerce') # Ensure numeric, handle errors
-    df = df.dropna(subset=['Date', 'Balance']) # Remove rows where date or balance parsing failed
-
-    df = df.sort_values(by='Date').groupby('Date')['Balance'].last().reset_index()
-    df = df.sort_values(by='Date').reset_index(drop=True) # Final sort
-
-    logging.info(f"Hapoalim: Successfully extracted {len(df)} unique balance points from {filename_for_logging}")
+    df['Balance'] = pd.to_numeric(df['Balance'])
+    # In Streamlit, it is better to group and get the last balance for the day.
+    df = df.sort_values(by=['Date'])
+    df = df.drop_duplicates(subset='Date', keep='last').reset_index(drop=True)
     return df[['Date', 'Balance']]
-# --- LEUMI PARSER ---
-def clean_transaction_amount_leumi(text):
-    """Cleans Leumi transaction amount, handles potential unicode zero-width space."""
-    if text is None or pd.isna(text) or text == '': return None
-    text = str(text).strip().replace('₪', '').replace(',', '')
-    text = text.lstrip('\u200b')
-    if text.count('.') > 1: # Handle cases like "1,234.56.78"
-        parts = text.split('.')
-        text = parts[0] + '.' + "".join(parts[1:])
-    if '.' not in text: return None # Requires a decimal point
-    try:
-        val = float(text)
-        if abs(val) > 100_000_000:
-            logging.debug(f"Leumi: Transaction amount seems excessively large: {val} from '{text}'. Skipping.")
-            return None
-        return val
-    except ValueError:
-        logging.debug(f"Leumi: Could not convert amount '{text}' to float.");
-        return None
 
-def clean_number_leumi(text):
-    """Specific cleaner for Leumi numbers (balances often). Uses general cleaner."""
+# --- LEUMI PARSER (REPLACED) ---
+def clean_transaction_amount_leumi(text):
     if text is None or pd.isna(text) or text == '': return None
     text = str(text).strip().replace('₪', '').replace(',', '')
+    if '.' not in text: return None # Require decimal for amount
     text = text.lstrip('\u200b')
-    if text.count('.') > 1: # Handle cases like "1,234.56.78"
-        parts = text.split('.')
-        text = parts[0] + '.' + "".join(parts[1:])
     try:
-        return float(text)
+        if text.count('.') > 1:
+            parts = text.split('.')
+            text = parts[0] + '.' + "".join(parts[1:])
+        val = float(text)
+        if abs(val) > 1_000_000: return None # Basic sanity check
+        return val
     except ValueError: return None
 
-def parse_date_leumi(date_str):
-    """Specific date parser for Leumi. Uses general parser."""
-    return parse_date_general(date_str)
-
 def normalize_text_leumi(text):
-    """Normalizes Leumi text, including potential Hebrew reversal correction."""
     if text is None or pd.isna(text): return None
-    text = str(text).replace('\r', ' ').replace('\n', ' ').replace('\u200b', '').strip()
-    text = unicodedata.normalize('NFC', text)
+    text = str(text).replace('\r', ' ').replace('\n', ' ')
+    text = unicodedata.normalize('NFC', text.strip())
     if any('\u0590' <= char <= '\u05EA' for char in text):
-        words = text.split()
-        reversed_text = ' '.join(words[::-1])
-        return reversed_text
+       words = text.split()
+       reversed_text = ' '.join(words[::-1])
+       return reversed_text
     return text
 
 def parse_leumi_transaction_line_extracted_order_v2(line_text, previous_balance):
-    """Attempts to parse a line assuming a specific column order from text extraction."""
     line = line_text.strip()
     if not line: return None
 
-
     pattern = re.compile(
         r"^([\-\u200b\d,\.]+)\s+"           # 1: Balance
-        r"(\d{1,3}(?:,\d{3})*\.\d{2})?\s*"  # 2: Optional Amount
-        r"(\S+)\s+"                         # 3: Reference (MANDATORY)
-        r"(.*?)\s+"                         # 4: Description
-        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+"     # 5: First Date (e.g., Transaction Date)
-        r"(\d{1,2}/\d{1,2}/\d{2,4})$"       # 6: Second Date (e.g., Value Date)
+        r"(\d{1,3}(?:,\d{3})*\.\d{2})?\s*" # 2: Amount (Optional, specific format)
+        r"(\S+)\s+"                        # 3: Reference
+        r"(.*?)\s+"                        # 4: Description
+        r"(\d{1,2}/\d{1,2}/\d{2,4})\s+"     # 5: Date
+        r"(\d{1,2}/\d{1,2}/\d{2,4})$"       # 6: Value Date
     )
-
     match = pattern.match(line)
-    if not match:
-        logging.debug(f"Leumi parse_line: No regex match for line: {line.strip()}")
+    if not match: return None
+
+    balance_str, amount_str, reference_str, description_raw, date_str, value_date_str = match.groups()
+
+    current_balance = clean_number_general(balance_str)
+    parsed_date = parse_date_general(date_str)
+
+    if parsed_date is None or current_balance is None: return None
+
+    amount = clean_transaction_amount_leumi(amount_str)
+    debit = None
+    credit = None
+
+    if amount is not None and amount != 0:
+        if previous_balance is not None: # Only assign Debit/Credit if previous balance exists
+            balance_diff = current_balance - previous_balance
+            tolerance = 0.02
+            if abs(balance_diff + amount) < tolerance: debit = amount
+            elif abs(balance_diff - amount) < tolerance: credit = amount
+            else: # Handle mismatch
+                if balance_diff < -tolerance: debit = amount
+                elif balance_diff > tolerance: credit = amount
+    elif amount is None:
         return None
 
-    balance_str = match.group(1)
-    amount_str = match.group(2)
-    reference_str = match.group(3)
-    description_raw = match.group(4)
-    date_to_parse_str = match.group(5)
+    return {
+        'Date': parsed_date, 'Balance': current_balance,
+        'Debit': debit, 'Credit': credit
+    }
 
-    parsed_date = parse_date_leumi(date_to_parse_str)
-    if not parsed_date:
-        logging.debug(f"Leumi parse_line: Failed to parse date '{date_to_parse_str}' from line: {line.strip()}")
-        return None
-
-    current_balance = clean_number_leumi(balance_str)
-    if current_balance is None:
-        logging.debug(f"Leumi parse_line: Failed to clean balance '{balance_str}' from line: {line.strip()}")
-        return None
-
-    amount = clean_transaction_amount_leumi(amount_str) # Can be None
-
-    debit = None; credit = None
-    if amount is not None and amount != 0 and previous_balance is not None:
-        balance_diff = round(current_balance - previous_balance, 2)
-        tolerance = 0.01
-        if abs(balance_diff + amount) <= tolerance: debit = amount
-        elif abs(balance_diff - amount) <= tolerance: credit = amount
-
-    return {'Date': parsed_date, 'Balance': current_balance, 'Debit': debit, 'Credit': credit, 'Reference': reference_str, 'Description': normalize_text_leumi(description_raw)}
-def extract_leumi_transactions_line_by_line(pdf_content_bytes, filename_for_logging="leumi_pdf"):
-    """Extracts Date and Balance from Leumi PDF by processing lines."""
-    transactions_data = []
+def extract_leumi_transactions_line_by_line(pdf_content_bytes, filename_for_logging):
+    transactions = []
     try:
         with pdfplumber.open(io.BytesIO(pdf_content_bytes)) as pdf:
-            previous_balance = None # Tracks the balance of the previously processed valid line
-            first_transaction_processed = False # Flag to set the first previous_balance correctly
-            logging.info(f"Starting Leumi PDF parsing for {filename_for_logging}")
+            previous_balance = None
+            first_transaction_processed = False
 
+            for page_number, page in enumerate(pdf.pages):
+                text = page.extract_text(x_tolerance=2, y_tolerance=2, layout=True)
+                if not text: continue
+                lines = text.splitlines()
 
-            for page_num, page in enumerate(pdf.pages):
-                try:
-                    text = page.extract_text(x_tolerance=2, y_tolerance=2, layout=True)
-                    if not text: continue
+                for line_num, line_text in enumerate(lines):
+                    cleaned_line = line_text.strip()
+                    if not cleaned_line: continue
 
-                    lines = text.splitlines()
-                    for line_num, line_text in enumerate(lines):
-                        normalized_line = normalize_text_leumi(line_text.strip())
-                        if not normalized_line: continue
+                    parsed_transaction_data = parse_leumi_transaction_line_extracted_order_v2(cleaned_line, previous_balance)
 
-                        parsed_data = parse_leumi_transaction_line_extracted_order_v2(normalized_line, previous_balance)
-
-                        if parsed_data and parsed_data['Balance'] is not None and parsed_data['Date'] is not None:
-                            current_balance = parsed_data['Balance']
-                            parsed_date = parsed_data['Date']
-
-                            if not first_transaction_processed:
-                                previous_balance = current_balance
-                                first_transaction_processed = True
-
-                            if parsed_data['Debit'] is not None or parsed_data['Credit'] is not None:
-                                transactions_data.append({'Date': parsed_date, 'Balance': current_balance})
-                                logging.debug(f"Leumi: Appended transaction - Date: {parsed_date}, Balance: {current_balance}, Line: {normalized_line.strip()}")
+                    if parsed_transaction_data:
+                        current_balance = parsed_transaction_data['Balance']
+                        if not first_transaction_processed:
+                            previous_balance = current_balance
+                            first_transaction_processed = True
+                        else:
+                            if parsed_transaction_data['Debit'] is not None or parsed_transaction_data['Credit'] is not None:
+                                transactions.append(parsed_transaction_data)
                                 previous_balance = current_balance
                             else:
-                                logging.debug(f"Leumi: Parsed line with balance but no Debit/Credit calculated, updating previous_balance: {normalized_line.strip()}")
                                 previous_balance = current_balance
-                        else:
-                            logging.debug(f"Leumi: Line did not match transaction pattern or contained invalid data (skipped): {normalized_line.strip()}")
-                            pass
-
-                except Exception as e:
-                     logging.error(f"Leumi: Error processing line {line_num+1} on page {page_num+1}: {e}", exc_info=True)
-                     continue
-
     except Exception as e:
-        logging.error(f"Leumi: FATAL ERROR processing PDF {filename_for_logging}: {e}", exc_info=True)
+        logging.error(f"Failed to process Leumi PDF file {filename_for_logging}: {e}", exc_info=True)
         return pd.DataFrame()
 
-    if not transactions_data:
-        logging.warning(f"Leumi: No transaction balances found in {filename_for_logging}")
+    if not transactions:
         return pd.DataFrame()
 
-    df = pd.DataFrame(transactions_data)
+    df = pd.DataFrame(transactions)
     df['Date'] = pd.to_datetime(df['Date'])
-    df['Balance'] = pd.to_numeric(df['Balance'], errors='coerce') # Ensure numeric
-    df = df.dropna(subset=['Date', 'Balance']) # Remove rows where date or balance parsing failed
-
+    df['Balance'] = pd.to_numeric(df['Balance'])
     df = df.sort_values(by='Date').groupby('Date')['Balance'].last().reset_index()
-    df = df.sort_values(by='Date').reset_index(drop=True) # Final sort
-
-    logging.info(f"Leumi: Successfully extracted {len(df)} unique balance points from {filename_for_logging}")
     return df[['Date', 'Balance']]
-# --- DISCOUNT PARSER ---
+
+# --- DISCOUNT PARSER (REPLACED) ---
+def reverse_hebrew_text(text):
+    if not text: return text
+    words = text.split()
+    reversed_words = [word[::-1] for word in words]
+    return ' '.join(reversed_words[::-1])
+
 def parse_discont_transaction_line(line_text):
-    """Attempts to parse a line from Discount assuming specific date/balance placement."""
     line = line_text.strip()
-    if not line or len(line) < 20: return None
-
-    balance_amount_pattern = re.compile(r"^([₪\-,\d]+\.\d{2})\s+([₪\-,\d]+\.\d{2})")
-    balance_amount_match = balance_amount_pattern.search(line)
-
-    if not balance_amount_match: return None
-
-    balance_str = balance_amount_match.group(1)
-    balance = clean_number_general(balance_str)
-
-    if balance is None:
-        logging.debug(f"Discount: Found dates but failed to clean balance: {balance_str} in line: {line.strip()}")
-        return None
+    if not line: return None
 
     date_pattern = re.compile(r"(\d{1,2}/\d{1,2}/\d{2,4})\s+(\d{1,2}/\d{1,2}/\d{2,4})$")
     date_match = date_pattern.search(line)
     if not date_match: return None
 
-    date_str = date_match.group(1)
-    parsed_date = parse_date_general(date_str)
+    date_str2 = date_match.group(1)
+    parsed_date = parse_date_general(date_str2)
+    if not parsed_date: return None
 
-    if not parsed_date:
-        logging.debug(f"Discount: Failed to parse date '{date_str}' from line: {line.strip()}")
-        return None
+    line_before_dates = line[:date_match.start()].strip()
+    balance_amount_pattern = re.compile(r"^([₪\-,\d]+\.\d{2})\s+([₪\-,\d]+\.\d{2})")
+    balance_amount_match = balance_amount_pattern.search(line_before_dates)
+    if not balance_amount_match: return None
 
-    lower_line = normalize_text_general(line).lower()
-    if any(phrase in lower_line for phrase in ["יתרת סגירה", "יתרה נכון", "סך הכל", "סהכ", "עמוד", "הודעה זו כוללת"]):
-         logging.debug(f"Discount: Skipping likely closing balance/summary/footer line: {line.strip()}")
-         return None
-    if any(header_part in lower_line for header_part in ["תאריך רישום", "תאריך ערך", "תיאור", "אסמכתא", "סכום", "יתרה"]):
-         logging.debug(f"Discount: Skipping likely header line: {line.strip()}")
-         return None
+    balance_str = balance_amount_match.group(1)
+    balance = clean_number_general(balance_str)
+    if balance is None: return None
 
-    logging.debug(f"Discount: Parsed transaction - Date: {parsed_date}, Balance: {balance}, Line: {line.strip()}")
     return {'Date': parsed_date, 'Balance': balance}
-def extract_and_parse_discont_pdf(pdf_content_bytes, filename_for_logging="discount_pdf"):
-    """Extracts Date and Balance from Discount PDF by processing lines."""
+
+def extract_and_parse_discont_pdf(pdf_content_bytes, filename_for_logging):
     transactions = []
     try:
         with pdfplumber.open(io.BytesIO(pdf_content_bytes)) as pdf:
-            logging.info(f"Starting Discount PDF parsing for {filename_for_logging}")
-            for page_num, page in enumerate(pdf.pages):
+            logging.info(f"Processing file: {filename_for_logging} with {len(pdf.pages)} pages.")
+            for page_number, page in enumerate(pdf.pages):
                 try:
-                    text = page.extract_text(x_tolerance=2, y_tolerance=2, layout=True)
+                    text = page.extract_text(x_tolerance=2, y_tolerance=2)
                     if text:
                         lines = text.splitlines()
-                        for line_num, line_text in enumerate(lines):
-                            normalized_line = normalize_text_general(line_text)
-                            parsed = parse_discont_transaction_line(normalized_line)
-                            if parsed:
-                                transactions.append(parsed)
+                        for line in lines:
+                            parsed_transaction = parse_discont_transaction_line(line)
+                            if parsed_transaction:
+                                transactions.append(parsed_transaction)
                 except Exception as e:
-                    logging.error(f"Discount: Error processing page {page_num+1}: {e}", exc_info=True)
-                    continue
-
-
+                    logging.warning(f"Error extracting or parsing text from page {page_number + 1} in {filename_for_logging}: {e}")
     except Exception as e:
-        logging.error(f"Discount: FATAL ERROR processing PDF {filename_for_logging}: {e}", exc_info=True)
+        logging.error(f"Failed to open or process PDF file {filename_for_logging}: {e}", exc_info=True)
         return pd.DataFrame()
 
     if not transactions:
-        logging.warning(f"Discount: No transaction balances found in {filename_for_logging}")
         return pd.DataFrame()
 
     df = pd.DataFrame(transactions)
     df['Date'] = pd.to_datetime(df['Date'])
-    df['Balance'] = pd.to_numeric(df['Balance'], errors='coerce')
-    df = df.dropna(subset=['Date', 'Balance'])
-
+    df['Balance'] = pd.to_numeric(df['Balance'])
     df = df.sort_values(by='Date').groupby('Date')['Balance'].last().reset_index()
-    df = df.sort_values(by='Date').reset_index(drop=True)
-
-    logging.info(f"Discount: Successfully extracted {len(df)} unique balance points from {filename_for_logging}")
     return df[['Date', 'Balance']]
-# --- CREDIT REPORT PARSER ---
-COLUMN_HEADER_WORDS_CR = {
-"שם", "מקור", "מידע", "מדווח", "מזהה", "עסקה", "מספר", "עסקאות",
-"גובה", "מסגרת", "מסגרות", "סכום", "הלוואות", "מקורי", "יתרת", "חוב",
-"יתרה", "שלא", "שולמה", "במועד", "פרטי", "עסקה", "בנק", "אוצר",
-"סוג", "מטבע", "מניין", "ימים", "ריבית", "ממוצעת"
+
+# --- CREDIT REPORT PARSER (REPLACED) ---
+COLUMN_HEADER_WORDS = {
+    "שם", "מקור", "מידע", "מדווח", "מזהה", "עסקה", "מספר", "עסקאות",
+    "גובה", "מסגרת", "מסגרות", "סכום", "הלוואות", "מקורי", "יתרת", "חוב",
+    "יתרה", "שלא", "שולמה", "במועד"
 }
-BANK_KEYWORDS_CR = {"בנק", "בעמ", "אגוד", "דיסקונט", "לאומי", "הפועלים", "מזרחי",
-"טפחות", "הבינלאומי", "מרכנתיל", "אוצר", "החייל", "ירושלים",
-"איגוד", "מימון", "ישיר", "כרטיסי", "אשראי", "מקס", "פיננסים",
-"כאל", "ישראכרט", "פועלים", "לאומי", "דיסקונט", "מזרחי", "טפחות", "בינלאומי", "מרכנתיל", "איגוד"}
+BANK_KEYWORDS = {"בנק", "בע\"מ", "אגוד", "דיסקונט", "לאומי", "הפועלים", "מזרחי",
+                 "טפחות", "הבינלאומי", "מרכנתיל", "אוצר", "החייל", "ירושלים",
+                 "איגוד", "מימון", "ישיר", "כרטיסי", "אשראי", "מקס", "פיננסים",
+                 "כאל", "ישראכרט"}
 
-def clean_credit_number(text):
-    """Specific cleaner for credit report numbers, uses general."""
-    return clean_number_general(text)
-
-def process_entry_final_cr(entry_data, section, all_rows_list):
-    """Processes a collected entry (bank name + numbers) into structured data."""
-    if not entry_data or not entry_data.get('bank') or not entry_data.get('numbers'):
-        logging.debug(f"CR: Skipping entry due to missing data: {entry_data}")
-        return
-
+def process_entry_final(entry_data, section, all_rows_list):
+    if not entry_data or not entry_data.get('bank') or len(entry_data.get('numbers', [])) < 2: return
 
     bank_name_raw = entry_data['bank']
     bank_name_cleaned = re.sub(r'\s*XX-[\w\d\-]+.*', '', bank_name_raw).strip()
     bank_name_cleaned = re.sub(r'\s+\d{1,3}(?:,\d{3})*$', '', bank_name_cleaned).strip()
-    bank_name_cleaned = re.sub(r'\s+בע\"מ$', '', bank_name_cleaned, flags=re.IGNORECASE).strip()
-    bank_name_cleaned = re.sub(r'\s+בנק$', '', bank_name_cleaned, flags=re.IGNORECASE).strip()
+    bank_name_cleaned = re.sub(r'\s+בע\"מ$', '', bank_name_cleaned).strip()
     bank_name_final = bank_name_cleaned if bank_name_cleaned else bank_name_raw
 
-    is_likely_bank = any(kw in bank_name_final for kw in ["לאומי", "הפועלים", "דיסקונט", "מזרחי", "הבינלאומי", "מרכנתיל", "ירושלים", "איגוד", "טפחות", "אוצר"])
-    if is_likely_bank and not bank_name_final.lower().endswith("בע\"מ"):
+    is_likely_bank = any(kw in bank_name_final for kw in ["בנק", "לאומי", "הפועלים", "דיסקונט", "מזרחי", "הבינלאומי", "מרכנתיל", "ירושלים", "איגוד"])
+    is_non_bank_entity = any(kw in bank_name_final for kw in ["מימון ישיר", "מקס איט", "כרטיסי אשראי", "כאל", "ישראכרט"])
+
+    if is_likely_bank and not bank_name_final.endswith("בע\"מ"):
         bank_name_final += " בע\"מ"
-    elif any(kw in bank_name_final for kw in ["מקס איט פיננסים", "מימון ישיר"]) and not bank_name_final.lower().endswith("בע\"מ"):
-         bank_name_final += " בע\"מ"
+    elif is_non_bank_entity and not bank_name_final.endswith("בע\"מ"):
+         if any(kw in bank_name_final for kw in ["מקס איט פיננסים", "מימון ישיר נדל\"ן ומשכנתאות"]):
+              bank_name_final += " בע\"מ"
 
-    numbers_raw = entry_data['numbers']
-    numbers = [clean_credit_number(n) for n in numbers_raw if clean_credit_number(n) is not None]
-
+    numbers = entry_data['numbers']
     num_count = len(numbers)
+
     limit_col, original_col, outstanding_col, unpaid_col = np.nan, np.nan, np.nan, np.nan
 
-    if num_count >= 1:
-        val1 = numbers[0] if num_count > 0 else np.nan
-        val2 = numbers[1] if num_count > 1 else np.nan
-        val3 = numbers[2] if num_count > 2 else np.nan
-        val4 = numbers[3] if num_count > 3 else np.nan
+    if num_count >= 2:
+        val1 = numbers[0]
+        val2 = numbers[1]
+        val3 = numbers[2] if num_count >= 3 else 0.0
 
         if section in ["עו\"ש", "מסגרת אשראי"]:
-             if num_count >= 2:
-                  limit_col = val1
-                  outstanding_col = val2
-                  unpaid_col = val3 if num_count > 2 else 0.0
-             elif num_count == 1:
-                  logging.debug(f"CR: Skipping עו\"ש/מסגרת entry for '{bank_name_final}' with only 1 number.")
-                  return
-
+            limit_col = val1
+            outstanding_col = val2
+            unpaid_col = val3
         elif section in ["הלוואה", "משכנתה"]:
-            if num_count >= 2:
-                 if pd.notna(val1) and val1 == int(val1) and val1 > 0 and val1 < 600 and num_count >= 3:
-                      original_col = val2
-                      outstanding_col = val3
-                      unpaid_col = val4 if num_count > 3 else 0.0
+            if num_count >= 3:
+                 if val1 < 50 and val1 == int(val1) and num_count >= 4:
+                      original_col = numbers[1]
+                      outstanding_col = numbers[2]
+                      unpaid_col = numbers[3]
                  else:
                      original_col = val1
-                     outstanding_col = val2 if num_count > 1 else np.nan
-                     unpaid_col = val3 if num_count > 2 else 0.0
-            elif num_count == 1:
-                 outstanding_col = val1
-                 original_col = np.nan
-                 unpaid_col = 0.0
-                 logging.debug(f"CR: Processing הלוואה/משכנתה entry for '{bank_name_final}' with only 1 number as Outstanding.")
-
-        else: # Default case
-            if num_count >= 2:
+                     outstanding_col = val2
+                     unpaid_col = val3
+            elif num_count == 2:
                  original_col = val1
                  outstanding_col = val2
-                 unpaid_col = val3 if num_count > 2 else 0.0
-            elif num_count == 1:
-                 outstanding_col = val1
-                 original_col = np.nan
                  unpaid_col = 0.0
-            logging.debug(f"CR: Processing 'אחר' entry for '{bank_name_final}' with {num_count} numbers.")
-
-        if pd.notna(outstanding_col) or pd.notna(limit_col):
-             all_rows_list.append({
-                 "סוג עסקה": section,
-                 "שם בנק/מקור": bank_name_final,
-                 "גובה מסגרת": limit_col,
-                 "סכום מקורי": original_col,
-                 "יתרת חוב": outstanding_col,
-                 "יתרה שלא שולמה": unpaid_col
-             })
-             logging.debug(f"CR: Appended row: {all_rows_list[-1]}")
         else:
-            logging.debug(f"CR: Skipping entry for '{bank_name_final}' as no outstanding or limit found after number parsing.")
-def extract_credit_data_final_v13(pdf_content_bytes, filename_for_logging="credit_report_pdf"):
-    """Extracts structured credit data from the report PDF."""
+            original_col = val1
+            outstanding_col = val2
+            unpaid_col = val3
+
+        all_rows_list.append({
+            "סוג עסקה": section,
+            "שם בנק/מקור": bank_name_final,
+            "גובה מסגרת": limit_col,
+            "סכום מקורי": original_col,
+            "יתרת חוב": outstanding_col,
+            "יתרה שלא שולמה": unpaid_col
+        })
+
+def extract_credit_data_final_v13(pdf_content_bytes, filename_for_logging):
     extracted_rows = []
     try:
         with fitz.open(stream=pdf_content_bytes, filetype="pdf") as doc:
@@ -561,142 +447,120 @@ def extract_credit_data_final_v13(pdf_content_bytes, filename_for_logging="credi
             last_line_was_id = False
             potential_bank_continuation_candidate = False
 
-
             section_patterns = {
                 "חשבון עובר ושב": "עו\"ש",
                 "הלוואה": "הלוואה",
                 "משכנתה": "משכנתה",
                 "מסגרת אשראי מתחדשת": "מסגרת אשראי",
-                "אחר": "אחר"
             }
             number_line_pattern = re.compile(r"^\s*(-?\d{1,3}(?:,\d{3})*\.?\d*)\s*$")
-            id_line_pattern = re.compile(r"^XX-[\w\d\-]+.*$")
-
-            logging.info(f"Starting Credit Report PDF parsing for {filename_for_logging}")
 
             for page_num, page in enumerate(doc):
-                try:
-                    lines = page.get_text("text", sort=True).splitlines()
-                    logging.debug(f"Page {page_num + 1} has {len(lines)} lines.")
+                text = page.get_text("text")
+                lines = text.splitlines()
 
-                    for line_num, line_text in enumerate(lines):
-                        line = normalize_text_general(line_text)
-                        if not line: potential_bank_continuation_candidate = False; continue
+                for i, line in enumerate(lines):
+                    original_line = line; line = line.strip()
+                    if not line:
+                        potential_bank_continuation_candidate = False
+                        continue
 
-                        is_section_header = False
-                        for header_keyword, section_name in section_patterns.items():
-                            if header_keyword in line and len(line) < len(header_keyword) + 25 and line.count(' ') < 6:
+                    is_section_header = False
+                    for header_keyword, section_name in section_patterns.items():
+                        if header_keyword in line and len(line) < len(header_keyword) + 20:
+                            if line.count(' ') < 5 :
                                 if current_entry and not current_entry.get('processed', False):
-                                    process_entry_final_cr(current_entry, current_section, extracted_rows)
+                                    process_entry_final(current_entry, current_section, extracted_rows)
                                 current_section = section_name
                                 current_entry = None
                                 last_line_was_id = False
                                 potential_bank_continuation_candidate = False
                                 is_section_header = True
-                                logging.debug(f"CR: Detected section header: {line} -> {current_section}")
                                 break
-                        if is_section_header: continue
+                    if is_section_header: continue
 
-                        if line.startswith("סה\"כ") or line.startswith("הודעה זו כוללת") or "עמוד" in line:
-                            if current_entry and not current_entry.get('processed', False):
-                                process_entry_final_cr(current_entry, current_section, extracted_rows)
-                            current_entry = None
-                            last_line_was_id = False
-                            potential_bank_continuation_candidate = False
-                            logging.debug(f"CR: Detected summary/footer line: {line}")
-                            continue
+                    is_total_line = line.startswith("סה\"כ")
+                    if is_total_line:
+                        if current_entry and not current_entry.get('processed', False):
+                            process_entry_final(current_entry, current_section, extracted_rows)
+                        current_entry = None
+                        last_line_was_id = False
+                        potential_bank_continuation_candidate = False
+                        continue
 
+                    if current_section:
                         number_match = number_line_pattern.match(line)
-                        is_id_line = id_line_pattern.match(line)
-                        is_noise_line = any(word in line.split() for word in COLUMN_HEADER_WORDS_CR) or line in [':', '.', '-', '—'] or (len(line.replace(' ','')) < 3 and not line.replace(' ','').isdigit()) or re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", line)
+                        is_id_line = line.startswith("XX-") and len(line) > 5
+                        is_header_word = any(word == line for word in COLUMN_HEADER_WORDS)
+                        is_noise_line = is_header_word or line in [':', '.'] or (len(line)<3 and not line.isdigit())
 
                         if number_match:
                             if current_entry:
                                 try:
-                                    number_str = number_match.group(1)
-                                    number = clean_credit_number(number_str)
-                                    if number is not None:
-                                        num_list = current_entry.get('numbers', [])
-                                        if last_line_was_id:
-                                            if current_entry and not current_entry.get('processed', False):
-                                                 process_entry_final_cr(current_entry, current_section, extracted_rows)
-                                            current_entry = {'bank': current_entry['bank'], 'numbers': [number], 'processed': False}
-                                            logging.debug(f"CR: Detected number after ID line, starting new entry for bank '{current_entry['bank']}' with first number: {number}")
-                                        else:
-                                             if len(num_list) < 5:
-                                                 current_entry['numbers'].append(number)
-                                                 logging.debug(f"CR: Added number {number} to current entry for bank '{current_entry.get('bank', 'N/A')}'. Numbers: {current_entry['numbers']}")
-                                             else:
-                                                 logging.debug(f"CR: Skipping extra number {number} for bank '{current_entry.get('bank', 'N/A')}'. Max numbers reached.")
-
-                                except Exception as e:
-                                    logging.error(f"CR: Error processing number line '{line.strip()}': {e}", exc_info=True)
-
+                                    number = float(number_match.group(1).replace(",", ""))
+                                    num_list = current_entry.get('numbers', [])
+                                    if last_line_was_id and len(num_list) >= 2:
+                                        if not current_entry.get('processed', False):
+                                             process_entry_final(current_entry, current_section, extracted_rows)
+                                        new_entry = {'bank': current_entry['bank'], 'numbers': [number], 'processed': False}
+                                        current_entry = new_entry
+                                    else:
+                                        if len(num_list) < 4:
+                                            current_entry['numbers'].append(number)
+                                except ValueError: pass
                             last_line_was_id = False
                             potential_bank_continuation_candidate = False
                             continue
-
                         elif is_id_line:
                             last_line_was_id = True
                             potential_bank_continuation_candidate = False
-                            logging.debug(f"CR: Detected ID line: {line}")
                             continue
-
                         elif is_noise_line:
                             last_line_was_id = False
                             potential_bank_continuation_candidate = False
-                            logging.debug(f"CR: Skipping likely noise line: {line}")
                             continue
-
                         else:
-                            cleaned_line = re.sub(r'\s*XX-[\w\d\-]+.*|\s+\d+$', '', line).strip()
-                            common_continuations = ["לישראל", "בע\"מ", "ומשכנתאות", "נדל\"ן", "דיסקונט", "הראשון", "פיננסים", "איגוד", "אשראי", "חברה", "למימון", "שירותים"]
+                             cleaned_line_for_kw_check = re.sub(r'\s*XX-[\w\d\-]+.*', '', line).strip()
+                             cleaned_line_for_kw_check = re.sub(r'\d+$', '', cleaned_line_for_kw_check).strip()
+                             contains_keyword = any(kw in cleaned_line_for_kw_check for kw in BANK_KEYWORDS)
+                             is_potential_bank = contains_keyword or len(cleaned_line_for_kw_check) > 6
+                             common_continuations = ["לישראל", "בע\"מ", "ומשכנתאות", "נדל\"ן", "דיסקונט", "הראשון", "פיננסים"]
+                             is_continuation = (potential_bank_continuation_candidate and current_entry and
+                                                not current_entry.get('numbers') and
+                                                any(cleaned_line_for_kw_check.startswith(cont) for cont in common_continuations))
 
-                            seems_like_continuation_text = any(cleaned_line.startswith(cont) for cont in common_continuations) or \
-                                                           (len(cleaned_line) > 3 and ' ' in cleaned_line and not any(char.isdigit() for char in cleaned_line))
-
-                            if potential_bank_continuation_candidate and current_entry and seems_like_continuation_text:
-                                current_entry['bank'] = (current_entry['bank'] + " " + cleaned_line).replace(" בע\"מ בע\"מ", " בע\"מ").strip()
-                                logging.debug(f"CR: Appended continuation '{cleaned_line}' to bank name. New bank name: '{current_entry['bank']}'")
-                                potential_bank_continuation_candidate = True
-                            elif len(cleaned_line) > 3 and any(kw in cleaned_line for kw in BANK_KEYWORDS_CR) and not any(char.isdigit() for char in cleaned_line):
-                                 if current_entry and not current_entry.get('processed', False):
-                                      process_entry_final_cr(current_entry, current_section, extracted_rows)
-                                 current_entry = {'bank': cleaned_line, 'numbers': [], 'processed': False}
+                             if is_continuation:
+                                 appendix = cleaned_line_for_kw_check
+                                 if appendix:
+                                     current_entry['bank'] += " " + appendix
+                                     current_entry['bank'] = current_entry['bank'].replace(" בע\"מ בע\"מ", " בע\"מ")
                                  potential_bank_continuation_candidate = True
-                                 logging.debug(f"CR: Started new entry with bank name: '{cleaned_line}'")
-                            else:
-                                  if current_entry and current_entry.get('numbers') and not current_entry.get('processed', False):
-                                       process_entry_final_cr(current_entry, current_section, extracted_rows)
-                                       current_entry['processed'] = True
-                                  potential_bank_continuation_candidate = False
-
-                            last_line_was_id = False
-
-                except Exception as e:
-                    logging.error(f"CR: Error processing line {line_num+1} on page {page_num+1}: {e}", exc_info=True)
-                    continue
+                             elif is_potential_bank:
+                                 if current_entry and not current_entry.get('processed', False):
+                                     process_entry_final(current_entry, current_section, extracted_rows)
+                                 current_entry = {'bank': line, 'numbers': [], 'processed': False}
+                                 potential_bank_continuation_candidate = True
+                             else:
+                                 potential_bank_continuation_candidate = False
+                             last_line_was_id = False
 
             if current_entry and not current_entry.get('processed', False):
-                process_entry_final_cr(current_entry, current_section, extracted_rows)
+                process_entry_final(current_entry, current_section, extracted_rows)
 
     except Exception as e:
-        logging.error(f"CreditReport: FATAL ERROR processing {filename_for_logging}: {e}", exc_info=True)
+        logging.error(f"FATAL ERROR processing credit report {filename_for_logging}: {e}", exc_info=True)
         return pd.DataFrame()
 
     if not extracted_rows:
-        logging.warning(f"CreditReport: No structured entries found in {filename_for_logging}")
         return pd.DataFrame()
 
     df = pd.DataFrame(extracted_rows)
-
     final_cols = ["סוג עסקה", "שם בנק/מקור", "גובה מסגרת", "סכום מקורי", "יתרת חוב", "יתרה שלא שולמה"]
     for col in final_cols:
         if col not in df.columns:
             df[col] = np.nan
-
     df = df[final_cols]
-
+    
     for col in ["גובה מסגרת", "סכום מקורי", "יתרת חוב", "יתרה שלא שולמה"]:
         if col in df.columns:
              df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -705,9 +569,8 @@ def extract_credit_data_final_v13(pdf_content_bytes, filename_for_logging="credi
 
     df = df.dropna(subset=['גובה מסגרת', 'סכום מקורי', 'יתרת חוב', 'יתרה שלא שולמה'], how='all').reset_index(drop=True)
 
-    logging.info(f"CreditReport: Successfully extracted {len(df)} entries from {filename_for_logging}")
-
     return df
+
 
 # --- Initialize Session State ---
 # This function ensures that all necessary variables are initialized
@@ -767,7 +630,7 @@ if st.session_state.app_stage == "welcome":
         st.header("👋 ברוכים הבאים ליועץ הפיננסי המשולב!")
         st.markdown("""
         כלי זה יסייע לכם לקבל תמונה רחבה על מצבכם הפיננסי. התהליך משלב ניתוח דוחות אוטומטי עם שאלון מקיף להבנת ההקשר המלא.
-        
+
         **שלבי התהליך:**
         1.  **העלאת דוחות (מומלץ):** דוח יתרות ועסקאות מהבנק ודוח נתוני אשראי.
         2.  **שאלון פיננסי:** מילוי פרטים על הכנסות, הוצאות, חובות ומצבכם הכללי.
@@ -1033,7 +896,7 @@ elif st.session_state.app_stage == "summary":
     annual_income = float(answers.get('annual_income', 0.0))
     debt_ratio = float(answers.get('debt_to_income_ratio', 0.0))
     classification_details = st.session_state.classification_details
-    
+
     # Define dataframes early for use in multiple places
     df_bank = st.session_state.df_bank_uploaded.dropna(subset=['Date', 'Balance']).sort_values('Date')
     df_credit = st.session_state.df_credit_uploaded.copy()
@@ -1146,7 +1009,7 @@ elif st.session_state.app_stage == "summary":
     # --- Chatbot and Raw Data Card ---
     with st.container():
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        
+
         with st.expander("הצג נתונים מפורטים שחולצו מהדוחות"):
             if not df_credit.empty:
                 st.write("נתוני דוח אשראי:")
@@ -1156,11 +1019,11 @@ elif st.session_state.app_stage == "summary":
                 st.dataframe(df_bank.style.format({"Balance": '{:,.2f}'}), use_container_width=True)
 
         st.divider()
-        
+
         st.header("💬 צ'אט עם יועץ פיננסי וירטואלי")
         if client:
             st.markdown("כעת תוכל/י לשאול שאלות על מצבך, לבקש הבהרות על הניתוח, או לקבל רעיונות לצעדים הבאים.")
-            
+
             # Prepare context for chatbot
             financial_context_parts = [
                 f"- סיווג פיננסי: {classification} ({classification_details.get('description', '')})",
