@@ -11,7 +11,8 @@ import traceback
 import numpy as np
 
 # PDF Parsing libraries
-import pymupdf as fitz # PyMuPDF, Hapoalim & Credit Report
+import fitz  # PyMuPDF
+ # PyMuPDF, Hapoalim & Credit Report
 import pdfplumber # Leumi & Discount
 
 from openai import OpenAI
@@ -1227,3 +1228,4 @@ if not st.session_state.df_bank_uploaded.empty:
 
 
         st.markdown('</div>', unsafe_allow_html=True)
+
