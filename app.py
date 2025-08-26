@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-import plotly.express as px
+import altair as alt
 from datetime import datetime
 import logging
 import unicodedata
@@ -1079,52 +1079,68 @@ elif st.session_state.app_stage == "summary":
         st.markdown('</div>', unsafe_allow_html=True)
 
 
-    # --- Visualizations ---
-    st.subheader("🎨 ויזואליזציות מרכזיות")
-    viz_col1, viz_col2 = st.columns(2)
+# --- Visualizations ---
+st.subheader("🎨 ויזואליזציות מרכזיות")
+viz_col1, viz_col2 = st.columns(2)
 
-    with viz_col1:
-        with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            # Debt Breakdown Pie Chart
-            if not st.session_state.df_credit_uploaded.empty and 'יתרת חוב' in st.session_state.df_credit_uploaded.columns:
-                df_credit = st.session_state.df_credit_uploaded.copy()
-                df_credit['יתרת חוב'] = pd.to_numeric(df_credit['יתרת חוב'], errors='coerce').fillna(0)
-                debt_summary = df_credit.groupby("סוג עסקה")["יתרת חוב"].sum().reset_index()
-                debt_summary = debt_summary[debt_summary['יתרת חוב'] > 0]
-                if not debt_summary.empty:
-                    fig_pie = px.pie(debt_summary, values='יתרת חוב', names='סוג עסקה', title='פירוט חובות (מדוח אשראי)', color_discrete_sequence=px.colors.qualitative.Pastel)
-                    st.plotly_chart(fig_pie, use_container_width=True)
-                else:
-                    st.info("לא נמצאו נתוני חוב משמעותיים בדוח האשראי.")
+with viz_col1:
+    with st.container():
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        # Debt Breakdown Pie (Altair Donut)
+        if not st.session_state.df_credit_uploaded.empty and 'יתרת חוב' in st.session_state.df_credit_uploaded.columns:
+            df_credit = st.session_state.df_credit_uploaded.copy()
+            df_credit['יתרת חוב'] = pd.to_numeric(df_credit['יתרת חוב'], errors='coerce').fillna(0)
+            debt_summary = df_credit.groupby("סוג עסקה")["יתרת חוב"].sum().reset_index()
+            debt_summary = debt_summary[debt_summary['יתרת חוב'] > 0]
+            if not debt_summary.empty:
+                chart_pie = alt.Chart(debt_summary).mark_arc(innerRadius=50).encode(
+                    theta=alt.Theta(field="יתרת חוב", type="quantitative"),
+                    color=alt.Color(field="סוג עסקה", type="nominal"),
+                    tooltip=["סוג עסקה", "יתרת חוב"]
+                ).properties(title="פירוט חובות (מדוח אשראי)")
+                st.altair_chart(chart_pie, use_container_width=True)
             else:
-                st.info("לא הועלה דוח נתוני אשראי לפירוט חובות.")
-            st.markdown('</div>', unsafe_allow_html=True)
+                st.info("לא נמצאו נתוני חוב משמעותיים בדוח האשראי.")
+        else:
+            st.info("לא הועלה דוח נתוני אשראי לפירוט חובות.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    with viz_col2:
-        with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            # Debt vs. Income Bar Chart
-            if total_debt > 0 or annual_income > 0:
-                comparison_data = pd.DataFrame({'קטגוריה': ['סך חובות', 'הכנסה שנתית'], 'סכום': [total_debt, annual_income]})
-                fig_bar = px.bar(comparison_data, x='קטגוריה', y='סכום', title='השוואת חובות להכנסה שנתית', color='קטגוריה', text_auto=True, labels={'סכום': 'סכום ב₪'})
-                fig_bar.update_layout(showlegend=False)
-                st.plotly_chart(fig_bar, use_container_width=True)
-            else:
-                st.info("אין נתוני חוב או הכנסה להצגת השוואה.")
-            st.markdown('</div>', unsafe_allow_html=True)
+with viz_col2:
+    with st.container():
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        # Debt vs. Income Bar (Altair)
+        if total_debt > 0 or annual_income > 0:
+            comparison_data = pd.DataFrame({
+                'קטגוריה': ['סך חובות', 'הכנסה שנתית'],
+                'סכום': [total_debt, annual_income]
+            })
+            chart_bar = alt.Chart(comparison_data).mark_bar().encode(
+                x=alt.X('קטגוריה', sort=None),
+                y='סכום',
+                color='קטגוריה',
+                tooltip=['קטגוריה', 'סכום']
+            ).properties(title="השוואת חובות להכנסה שנתית")
+            st.altair_chart(chart_bar, use_container_width=True)
+        else:
+            st.info("אין נתוני חוב או הכנסה להצגת השוואה.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    # Bank Balance Trend Chart (full width)
-    if not st.session_state.df_bank_uploaded.empty:
-        with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            df_bank = st.session_state.df_bank_uploaded.dropna(subset=['Date', 'Balance']).sort_values('Date')
-            if not df_bank.empty:
-                fig_line = px.line(df_bank, x='Date', y='Balance', title='מגמת יתרת חשבון הבנק', markers=True, labels={'Date': 'תאריך', 'Balance': 'יתרה'})
-                st.plotly_chart(fig_line, use_container_width=True)
-            else:
-                st.info("אין נתוני יתרה תקינים בדוח הבנק להצגה.")
-            st.markdown('</div>', unsafe_allow_html=True)
+# Bank Balance Trend (Altair Line Chart)
+if not st.session_state.df_bank_uploaded.empty:
+    with st.container():
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        df_bank = st.session_state.df_bank_uploaded.dropna(subset=['Date', 'Balance']).sort_values('Date')
+        if not df_bank.empty:
+            chart_line = alt.Chart(df_bank).mark_line(point=True).encode(
+                x=alt.X('Date:T', title="תאריך"),
+                y=alt.Y('Balance:Q', title="יתרה"),
+                tooltip=['Date', 'Balance']
+            ).properties(title="מגמת יתרת חשבון הבנק")
+            st.altair_chart(chart_line, use_container_width=True)
+        else:
+            st.info("אין נתוני יתרה תקינים בדוח הבנק להצגה.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
 
     # --- Raw Data Expander ---
     with st.expander("הצג נתונים מפורטים שחולצו מהדוחות"):
@@ -1208,5 +1224,6 @@ elif st.session_state.app_stage == "summary":
                 st.rerun()
         else:
             st.warning("שירות הצ'אט אינו זמין. יש להגדיר מפתח API של OpenAI בסודות האפליקציה (secrets).")
+
 
         st.markdown('</div>', unsafe_allow_html=True)
