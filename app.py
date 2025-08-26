@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
@@ -1032,6 +1033,11 @@ elif st.session_state.app_stage == "summary":
     annual_income = float(answers.get('annual_income', 0.0))
     debt_ratio = float(answers.get('debt_to_income_ratio', 0.0))
     classification_details = st.session_state.classification_details
+    
+    # Define dataframes early for use in multiple places
+    df_bank = st.session_state.df_bank_uploaded.dropna(subset=['Date', 'Balance']).sort_values('Date')
+    df_credit = st.session_state.df_credit_uploaded.copy()
+
 
     # --- Classification and Recommendations Card ---
     with st.container():
@@ -1043,7 +1049,7 @@ elif st.session_state.app_stage == "summary":
         if color == "green":
             st.success(f"🟢 **סיווג: {classification}**")
             st.markdown("""
-            **מצב יציב.** יחס החוב להכנסה נמוך ומאפשר גמישות פיננסית.
+            **מצב יציב.** יחס החוב להכנסה נמוך ומאפשר גמישות פיננסיות.
             * **המלצה:** המשך/י בניהול פיננסי אחראי. זהו זמן טוב לשקול הגדלת חיסכון או השקעות.
             """)
         elif color == "orange":
@@ -1087,16 +1093,15 @@ elif st.session_state.app_stage == "summary":
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
             # Debt Breakdown Pie (Altair Donut)
-            if not st.session_state.df_credit_uploaded.empty and 'יתרת חוב' in st.session_state.df_credit_uploaded.columns:
-                df_credit = st.session_state.df_credit_uploaded.copy()
+            if not df_credit.empty and 'יתרת חוב' in df_credit.columns:
                 df_credit['יתרת חוב'] = pd.to_numeric(df_credit['יתרת חוב'], errors='coerce').fillna(0)
                 debt_summary = df_credit.groupby("סוג עסקה")["יתרת חוב"].sum().reset_index()
                 debt_summary = debt_summary[debt_summary['יתרת חוב'] > 0]
                 if not debt_summary.empty:
                     chart_pie = alt.Chart(debt_summary).mark_arc(innerRadius=50).encode(
                         theta=alt.Theta(field="יתרת חוב", type="quantitative"),
-                        color=alt.Color(field="סוג עסקה", type="nominal"),
-                        tooltip=["סוג עסקה", "יתרת חוב"]
+                        color=alt.Color(field="סוג עסקה", type="nominal", title="סוג עסקה"),
+                        tooltip=["סוג עסקה", alt.Tooltip("יתרת חוב", format=',.0f')]
                     ).properties(title="פירוט חובות (מדוח אשראי)")
                     st.altair_chart(chart_pie, use_container_width=True)
                 else:
@@ -1115,10 +1120,10 @@ elif st.session_state.app_stage == "summary":
                     'סכום': [total_debt, annual_income]
                 })
                 chart_bar = alt.Chart(comparison_data).mark_bar().encode(
-                    x=alt.X('קטגוריה', sort=None),
-                    y='סכום',
-                    color='קטגוריה',
-                    tooltip=['קטגוריה', 'סכום']
+                    x=alt.X('קטגוריה', sort=None, title=None),
+                    y=alt.Y('סכום', title="סכום ב-₪"),
+                    color=alt.Color('קטגוריה', legend=None),
+                    tooltip=['קטגוריה', alt.Tooltip('סכום', format=',.0f')]
                 ).properties(title="השוואת חובות להכנסה שנתית")
                 st.altair_chart(chart_bar, use_container_width=True)
             else:
@@ -1126,35 +1131,32 @@ elif st.session_state.app_stage == "summary":
             st.markdown('</div>', unsafe_allow_html=True)
 
     # Bank Balance Trend (Altair Line Chart)
-    if not st.session_state.df_bank_uploaded.empty:
+    if not df_bank.empty:
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            df_bank = st.session_state.df_bank_uploaded.dropna(subset=['Date', 'Balance']).sort_values('Date')
-            if not df_bank.empty:
-                chart_line = alt.Chart(df_bank).mark_line(point=True).encode(
-                    x=alt.X('Date:T', title="תאריך"),
-                    y=alt.Y('Balance:Q', title="יתרה"),
-                    tooltip=['Date', 'Balance']
-                ).properties(title="מגמת יתרת חשבון הבנק")
-                st.altair_chart(chart_line, use_container_width=True)
-            else:
-                st.info("אין נתוני יתרה תקינים בדוח הבנק להצגה.")
-            st.markdown('</div>', unsafe_allow_html=True)
+            chart_line = alt.Chart(df_bank).mark_line(point=True).encode(
+                x=alt.X('Date:T', title="תאריך"),
+                y=alt.Y('Balance:Q', title="יתרה ב-₪"),
+                tooltip=[alt.Tooltip('Date', title='תאריך'), alt.Tooltip('Balance', title='יתרה', format=',.0f')]
+            ).properties(title="מגמת יתרת חשבון הבנק").interactive()
+            st.altair_chart(chart_line, use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
-    # --- Raw Data Expander ---
-    with st.expander("הצג נתונים מפורטים שחולצו מהדוחות"):
-        if not st.session_state.df_credit_uploaded.empty:
-            st.write("נתוני דוח אשראי:")
-            st.dataframe(st.session_state.df_credit_uploaded.style.format(precision=0, thousands=","), use_container_width=True)
-        if not st.session_state.df_bank_uploaded.empty:
-            st.write(f"נתוני דוח בנק ({st.session_state.bank_type_selected}):")
-            st.dataframe(st.session_state.df_bank_uploaded.style.format({"Balance": '{:,.2f}'}), use_container_width=True)
-
-    # --- Chatbot Interface ---
-    st.divider()
+    # --- Chatbot and Raw Data Card ---
     with st.container():
         st.markdown('<div class="card">', unsafe_allow_html=True)
+        
+        with st.expander("הצג נתונים מפורטים שחולצו מהדוחות"):
+            if not df_credit.empty:
+                st.write("נתוני דוח אשראי:")
+                st.dataframe(df_credit.style.format(precision=0, thousands=","), use_container_width=True)
+            if not df_bank.empty:
+                st.write(f"נתוני דוח בנק ({st.session_state.bank_type_selected}):")
+                st.dataframe(df_bank.style.format({"Balance": '{:,.2f}'}), use_container_width=True)
+
+        st.divider()
+        
         st.header("💬 צ'אט עם יועץ פיננסי וירטואלי")
         if client:
             st.markdown("כעת תוכל/י לשאול שאלות על מצבך, לבקש הבהרות על הניתוח, או לקבל רעיונות לצעדים הבאים.")
@@ -1168,18 +1170,16 @@ elif st.session_state.app_stage == "summary":
                 f"- סך חובות (ללא משכנתא): {total_debt:,.0f} ₪",
                 f"- יחס חוב להכנסה שנתית: {debt_ratio:.2%}"
             ]
-            if not st.session_state.df_credit_uploaded.empty:
+            if not df_credit.empty:
                 financial_context_parts.append("\nפירוט חובות מדוח אשראי:")
-                for _, row in st.session_state.df_credit_uploaded.head(10).iterrows():
+                for _, row in df_credit.head(10).iterrows():
                     financial_context_parts.append(f"  - {row.get('סוג עסקה', '')} ב{row.get('שם בנק/מקור', '')}: יתרת חוב {row.get('יתרת חוב', 0):,.0f} ₪ (פיגור: {row.get('יתרה שלא שולמה', 0):,.0f} ₪)")
-            if not st.session_state.df_bank_uploaded.empty:
-                df_bank = st.session_state.df_bank_uploaded.dropna(subset=['Date', 'Balance']).sort_values('Date')
-                if not df_bank.empty:
-                    start_date = df_bank['Date'].min().strftime('%d/%m/%Y')
-                    end_date = df_bank['Date'].max().strftime('%d/%m/%Y')
-                    start_bal = df_bank.iloc[0]['Balance']
-                    end_bal = df_bank.iloc[-1]['Balance']
-                    financial_context_parts.append(f"\nמגמת יתרת בנק ({start_date} עד {end_date}): מ-{start_bal:,.0f} ₪ ל-{end_bal:,.0f} ₪.")
+            if not df_bank.empty:
+                start_date = df_bank['Date'].min().strftime('%d/%m/%Y')
+                end_date = df_bank['Date'].max().strftime('%d/%m/%Y')
+                start_bal = df_bank.iloc[0]['Balance']
+                end_bal = df_bank.iloc[-1]['Balance']
+                financial_context_parts.append(f"\nמגמת יתרת בנק ({start_date} עד {end_date}): מ-{start_bal:,.0f} ₪ ל-{end_bal:,.0f} ₪.")
 
             system_prompt = (
                 "אתה יועץ פיננסי מומחה לכלכלת המשפחה בישראל. תפקידך לספק ייעוץ פרקטי, ברור ואמפתי. "
