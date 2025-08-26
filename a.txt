@@ -2,8 +2,9 @@ streamlit
 pandas
 plotly==5.22.0
 numpy
-pymupdf
+PyMuPDF
 pdfplumber
 openai
+
 
 
