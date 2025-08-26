@@ -11,8 +11,7 @@ import traceback
 import numpy as np
 
 # PDF Parsing libraries
-import pymupdf as fitz  # PyMuPDF
- # PyMuPDF, Hapoalim & Credit Report
+import pymupdf as fitz # PyMuPDF, Hapoalim & Credit Report
 import pdfplumber # Leumi & Discount
 
 from openai import OpenAI
@@ -1080,67 +1079,67 @@ elif st.session_state.app_stage == "summary":
         st.markdown('</div>', unsafe_allow_html=True)
 
 
-# --- Visualizations ---
-st.subheader("🎨 ויזואליזציות מרכזיות")
-viz_col1, viz_col2 = st.columns(2)
+    # --- Visualizations ---
+    st.subheader("🎨 ויזואליזציות מרכזיות")
+    viz_col1, viz_col2 = st.columns(2)
 
-with viz_col1:
-    with st.container():
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        # Debt Breakdown Pie (Altair Donut)
-        if not st.session_state.df_credit_uploaded.empty and 'יתרת חוב' in st.session_state.df_credit_uploaded.columns:
-            df_credit = st.session_state.df_credit_uploaded.copy()
-            df_credit['יתרת חוב'] = pd.to_numeric(df_credit['יתרת חוב'], errors='coerce').fillna(0)
-            debt_summary = df_credit.groupby("סוג עסקה")["יתרת חוב"].sum().reset_index()
-            debt_summary = debt_summary[debt_summary['יתרת חוב'] > 0]
-            if not debt_summary.empty:
-                chart_pie = alt.Chart(debt_summary).mark_arc(innerRadius=50).encode(
-                    theta=alt.Theta(field="יתרת חוב", type="quantitative"),
-                    color=alt.Color(field="סוג עסקה", type="nominal"),
-                    tooltip=["סוג עסקה", "יתרת חוב"]
-                ).properties(title="פירוט חובות (מדוח אשראי)")
-                st.altair_chart(chart_pie, use_container_width=True)
+    with viz_col1:
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            # Debt Breakdown Pie (Altair Donut)
+            if not st.session_state.df_credit_uploaded.empty and 'יתרת חוב' in st.session_state.df_credit_uploaded.columns:
+                df_credit = st.session_state.df_credit_uploaded.copy()
+                df_credit['יתרת חוב'] = pd.to_numeric(df_credit['יתרת חוב'], errors='coerce').fillna(0)
+                debt_summary = df_credit.groupby("סוג עסקה")["יתרת חוב"].sum().reset_index()
+                debt_summary = debt_summary[debt_summary['יתרת חוב'] > 0]
+                if not debt_summary.empty:
+                    chart_pie = alt.Chart(debt_summary).mark_arc(innerRadius=50).encode(
+                        theta=alt.Theta(field="יתרת חוב", type="quantitative"),
+                        color=alt.Color(field="סוג עסקה", type="nominal"),
+                        tooltip=["סוג עסקה", "יתרת חוב"]
+                    ).properties(title="פירוט חובות (מדוח אשראי)")
+                    st.altair_chart(chart_pie, use_container_width=True)
+                else:
+                    st.info("לא נמצאו נתוני חוב משמעותיים בדוח האשראי.")
             else:
-                st.info("לא נמצאו נתוני חוב משמעותיים בדוח האשראי.")
-        else:
-            st.info("לא הועלה דוח נתוני אשראי לפירוט חובות.")
-        st.markdown('</div>', unsafe_allow_html=True)
+                st.info("לא הועלה דוח נתוני אשראי לפירוט חובות.")
+            st.markdown('</div>', unsafe_allow_html=True)
 
-with viz_col2:
-    with st.container():
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        # Debt vs. Income Bar (Altair)
-        if total_debt > 0 or annual_income > 0:
-            comparison_data = pd.DataFrame({
-                'קטגוריה': ['סך חובות', 'הכנסה שנתית'],
-                'סכום': [total_debt, annual_income]
-            })
-            chart_bar = alt.Chart(comparison_data).mark_bar().encode(
-                x=alt.X('קטגוריה', sort=None),
-                y='סכום',
-                color='קטגוריה',
-                tooltip=['קטגוריה', 'סכום']
-            ).properties(title="השוואת חובות להכנסה שנתית")
-            st.altair_chart(chart_bar, use_container_width=True)
-        else:
-            st.info("אין נתוני חוב או הכנסה להצגת השוואה.")
-        st.markdown('</div>', unsafe_allow_html=True)
+    with viz_col2:
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            # Debt vs. Income Bar (Altair)
+            if total_debt > 0 or annual_income > 0:
+                comparison_data = pd.DataFrame({
+                    'קטגוריה': ['סך חובות', 'הכנסה שנתית'],
+                    'סכום': [total_debt, annual_income]
+                })
+                chart_bar = alt.Chart(comparison_data).mark_bar().encode(
+                    x=alt.X('קטגוריה', sort=None),
+                    y='סכום',
+                    color='קטגוריה',
+                    tooltip=['קטגוריה', 'סכום']
+                ).properties(title="השוואת חובות להכנסה שנתית")
+                st.altair_chart(chart_bar, use_container_width=True)
+            else:
+                st.info("אין נתוני חוב או הכנסה להצגת השוואה.")
+            st.markdown('</div>', unsafe_allow_html=True)
 
-# Bank Balance Trend (Altair Line Chart)
-if not st.session_state.df_bank_uploaded.empty:
-    with st.container():
-        st.markdown('<div class="card">', unsafe_allow_html=True)
-        df_bank = st.session_state.df_bank_uploaded.dropna(subset=['Date', 'Balance']).sort_values('Date')
-        if not df_bank.empty:
-            chart_line = alt.Chart(df_bank).mark_line(point=True).encode(
-                x=alt.X('Date:T', title="תאריך"),
-                y=alt.Y('Balance:Q', title="יתרה"),
-                tooltip=['Date', 'Balance']
-            ).properties(title="מגמת יתרת חשבון הבנק")
-            st.altair_chart(chart_line, use_container_width=True)
-        else:
-            st.info("אין נתוני יתרה תקינים בדוח הבנק להצגה.")
-        st.markdown('</div>', unsafe_allow_html=True)
+    # Bank Balance Trend (Altair Line Chart)
+    if not st.session_state.df_bank_uploaded.empty:
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            df_bank = st.session_state.df_bank_uploaded.dropna(subset=['Date', 'Balance']).sort_values('Date')
+            if not df_bank.empty:
+                chart_line = alt.Chart(df_bank).mark_line(point=True).encode(
+                    x=alt.X('Date:T', title="תאריך"),
+                    y=alt.Y('Balance:Q', title="יתרה"),
+                    tooltip=['Date', 'Balance']
+                ).properties(title="מגמת יתרת חשבון הבנק")
+                st.altair_chart(chart_line, use_container_width=True)
+            else:
+                st.info("אין נתוני יתרה תקינים בדוח הבנק להצגה.")
+            st.markdown('</div>', unsafe_allow_html=True)
 
 
     # --- Raw Data Expander ---
@@ -1159,7 +1158,7 @@ if not st.session_state.df_bank_uploaded.empty:
         st.header("💬 צ'אט עם יועץ פיננסי וירטואלי")
         if client:
             st.markdown("כעת תוכל/י לשאול שאלות על מצבך, לבקש הבהרות על הניתוח, או לקבל רעיונות לצעדים הבאים.")
-
+            
             # Prepare context for chatbot
             financial_context_parts = [
                 f"- סיווג פיננסי: {classification} ({classification_details.get('description', '')})",
@@ -1169,20 +1168,19 @@ if not st.session_state.df_bank_uploaded.empty:
                 f"- סך חובות (ללא משכנתא): {total_debt:,.0f} ₪",
                 f"- יחס חוב להכנסה שנתית: {debt_ratio:.2%}"
             ]
-            # Add credit report details if available
             if not st.session_state.df_credit_uploaded.empty:
                 financial_context_parts.append("\nפירוט חובות מדוח אשראי:")
                 for _, row in st.session_state.df_credit_uploaded.head(10).iterrows():
                     financial_context_parts.append(f"  - {row.get('סוג עסקה', '')} ב{row.get('שם בנק/מקור', '')}: יתרת חוב {row.get('יתרת חוב', 0):,.0f} ₪ (פיגור: {row.get('יתרה שלא שולמה', 0):,.0f} ₪)")
-            # Add bank trend info if available
-            if not st.session_state.df_bank_uploaded.empty and not df_bank.empty:
-                start_date = df_bank['Date'].min().strftime('%d/%m/%Y')
-                end_date = df_bank['Date'].max().strftime('%d/%m/%Y')
-                start_bal = df_bank.iloc[0]['Balance']
-                end_bal = df_bank.iloc[-1]['Balance']
-                financial_context_parts.append(f"\nמגמת יתרת בנק ({start_date} עד {end_date}): מ-{start_bal:,.0f} ₪ ל-{end_bal:,.0f} ₪.")
+            if not st.session_state.df_bank_uploaded.empty:
+                df_bank = st.session_state.df_bank_uploaded.dropna(subset=['Date', 'Balance']).sort_values('Date')
+                if not df_bank.empty:
+                    start_date = df_bank['Date'].min().strftime('%d/%m/%Y')
+                    end_date = df_bank['Date'].max().strftime('%d/%m/%Y')
+                    start_bal = df_bank.iloc[0]['Balance']
+                    end_bal = df_bank.iloc[-1]['Balance']
+                    financial_context_parts.append(f"\nמגמת יתרת בנק ({start_date} עד {end_date}): מ-{start_bal:,.0f} ₪ ל-{end_bal:,.0f} ₪.")
 
-            # System Prompt
             system_prompt = (
                 "אתה יועץ פיננסי מומחה לכלכלת המשפחה בישראל. תפקידך לספק ייעוץ פרקטי, ברור ואמפתי. "
                 "ענה בעברית רהוטה. התבסס אך ורק על הנתונים המסוכמים הבאים של המשתמש. "
@@ -1192,12 +1190,10 @@ if not st.session_state.df_bank_uploaded.empty:
                 "--- סיכום נתוני המשתמש ---\n" + "\n".join(financial_context_parts) + "\n--- סוף נתונים ---"
             )
 
-            # Display chat history
             for message in st.session_state.chat_messages:
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
 
-            # Handle new input
             if prompt := st.chat_input("שאל/י אותי כל שאלה..."):
                 st.session_state.chat_messages.append({"role": "user", "content": prompt})
                 with st.chat_message("user"): st.markdown(prompt)
@@ -1226,8 +1222,4 @@ if not st.session_state.df_bank_uploaded.empty:
         else:
             st.warning("שירות הצ'אט אינו זמין. יש להגדיר מפתח API של OpenAI בסודות האפליקציה (secrets).")
 
-
         st.markdown('</div>', unsafe_allow_html=True)
-
-
-
