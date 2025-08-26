@@ -5,5 +5,3 @@ numpy
 PyMuPDF
 pdfplumber
 openai
-plotly.express
-
