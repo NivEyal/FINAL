@@ -93,6 +93,23 @@ st.markdown("""
     .stChatInput {
         background-color: white;
     }
+    /* --- RTL + יישור לימין --- */
+html, body, [data-testid="stAppViewContainer"] { direction: rtl; }
+.block-container { text-align: right; }
+label, .stRadio, .stSelectbox, .stTextArea, .stNumberInput { text-align: right !important; }
+.stTextInput > div > div > input,
+.stTextArea textarea { direction: rtl; }
+
+/* תגיות/Badges קטנות */
+.badge {
+  display:inline-block; padding:4px 10px; border-radius:999px; font-weight:600; font-size:12px;
+  background:#eef2ff; color:#1a2a6c; border:1px solid #dfe6ff;
+}
+
+/* כרטיס “מרחף” מעט */
+.card { border: 1px solid #e6eaf2; box-shadow: 0 6px 14px rgba(0,0,0,.06); border-radius: 14px; transition: transform .2s ease, box-shadow .2s ease; }
+.card:hover { transform: translateY(-2px); box-shadow: 0 10px 18px rgba(0,0,0,.08); }
+                
 </style>
 """, unsafe_allow_html=True)
 
@@ -148,6 +165,14 @@ def normalize_text_general(text):
     if text is None: return None
     text = str(text).replace('\r', ' ').replace('\n', ' ').replace('\u200b', '').strip()
     return unicodedata.normalize('NFC', text)
+# --- Empty DF helpers ---
+def empty_bank_df():
+    """Empty dataframe with expected bank schema."""
+    return pd.DataFrame(columns=['Date', 'Balance'])
+
+def empty_credit_df():
+    """Empty dataframe with expected credit-report schema."""
+    return pd.DataFrame(columns=["סוג עסקה","שם בנק/מקור","גובה מסגרת","סכום מקורי","יתרת חוב","יתרה שלא שולמה"])
 
 # --- PDF Parsers (HAPOALIM, LEUMI, DISCOUNT, CREDIT REPORT) ---
 
@@ -158,7 +183,7 @@ def extract_transactions_from_pdf_hapoalim(pdf_content_bytes, filename_for_loggi
         doc = fitz.open(stream=pdf_content_bytes, filetype="pdf")
     except Exception as e:
         logging.error(f"Failed to open/process PDF {filename_for_logging}: {e}", exc_info=True)
-        return pd.DataFrame() # Return empty DataFrame on error
+        return empty_bank_df() # Return empty DataFrame on error
 
     date_pattern_end = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})\s*$")
     balance_pattern_start = re.compile(r"^\s*(₪?-?[\d,]+\.\d{2})")
@@ -188,7 +213,7 @@ def extract_transactions_from_pdf_hapoalim(pdf_content_bytes, filename_for_loggi
     doc.close()
 
     if not transactions:
-        return pd.DataFrame()
+        return empty_bank_df()
 
     df = pd.DataFrame(transactions)
     df['Date'] = pd.to_datetime(df['Date'])
@@ -274,7 +299,7 @@ def extract_leumi_transactions_line_by_line(pdf_content_bytes, filename_for_logg
             first_transaction_processed = False
 
             for page_number, page in enumerate(pdf.pages):
-                text = page.extract_text(x_tolerance=2, y_tolerance=2, layout=True)
+                text = page.extract_text(x_tolerance=3, y_tolerance=3, layout=True)
                 if not text: continue
                 lines = text.splitlines()
 
@@ -297,10 +322,10 @@ def extract_leumi_transactions_line_by_line(pdf_content_bytes, filename_for_logg
                                 previous_balance = current_balance
     except Exception as e:
         logging.error(f"Failed to process Leumi PDF file {filename_for_logging}: {e}", exc_info=True)
-        return pd.DataFrame()
+        return empty_bank_df()
 
     if not transactions:
-        return pd.DataFrame()
+        return empty_bank_df()
 
     df = pd.DataFrame(transactions)
     df['Date'] = pd.to_datetime(df['Date'])
@@ -317,24 +342,29 @@ def reverse_hebrew_text(text):
 
 def parse_discont_transaction_line(line_text):
     line = line_text.strip()
-    if not line: return None
+    if not line:
+        return None
 
+    # תאריך עסקה + תאריך ערך בסוף השורה
     date_pattern = re.compile(r"(\d{1,2}/\d{1,2}/\d{2,4})\s+(\d{1,2}/\d{1,2}/\d{2,4})$")
-    date_match = date_pattern.search(line)
-    if not date_match: return None
+    m_date = date_pattern.search(line)
+    if not m_date:
+        return None
 
-    date_str2 = date_match.group(1)
-    parsed_date = parse_date_general(date_str2)
-    if not parsed_date: return None
+    date_str = m_date.group(1)
+    parsed_date = parse_date_general(date_str)
+    if not parsed_date:
+        return None
 
-    line_before_dates = line[:date_match.start()].strip()
-    balance_amount_pattern = re.compile(r"^([₪\-,\d]+\.\d{2})\s+([₪\-,\d]+\.\d{2})")
-    balance_amount_match = balance_amount_pattern.search(line_before_dates)
-    if not balance_amount_match: return None
+    # החלק שלפני התאריכים – נחפש בו סכומים; היתרה מופיעה ראשונה
+    head = line[:m_date.start()].strip()
+    money_numbers = re.findall(r"[₪]?\-?[\d,]+\.\d{2}", head)
+    if not money_numbers:
+        return None
 
-    balance_str = balance_amount_match.group(1)
-    balance = clean_number_general(balance_str)
-    if balance is None: return None
+    balance = clean_number_general(money_numbers[0])
+    if balance is None:
+        return None
 
     return {'Date': parsed_date, 'Balance': balance}
 
@@ -345,7 +375,7 @@ def extract_and_parse_discont_pdf(pdf_content_bytes, filename_for_logging):
             logging.info(f"Processing file: {filename_for_logging} with {len(pdf.pages)} pages.")
             for page_number, page in enumerate(pdf.pages):
                 try:
-                    text = page.extract_text(x_tolerance=2, y_tolerance=2)
+                    text = page.extract_text(x_tolerance=3, y_tolerance=3)
                     if text:
                         lines = text.splitlines()
                         for line in lines:
@@ -356,10 +386,10 @@ def extract_and_parse_discont_pdf(pdf_content_bytes, filename_for_logging):
                     logging.warning(f"Error extracting or parsing text from page {page_number + 1} in {filename_for_logging}: {e}")
     except Exception as e:
         logging.error(f"Failed to open or process PDF file {filename_for_logging}: {e}", exc_info=True)
-        return pd.DataFrame()
+        return empty_bank_df()
 
     if not transactions:
-        return pd.DataFrame()
+        return empty_bank_df()
 
     df = pd.DataFrame(transactions)
     df['Date'] = pd.to_datetime(df['Date'])
@@ -549,10 +579,10 @@ def extract_credit_data_final_v13(pdf_content_bytes, filename_for_logging):
 
     except Exception as e:
         logging.error(f"FATAL ERROR processing credit report {filename_for_logging}: {e}", exc_info=True)
-        return pd.DataFrame()
+        return empty_credit_df()
 
     if not extracted_rows:
-        return pd.DataFrame()
+        return empty_credit_df()
 
     df = pd.DataFrame(extracted_rows)
     final_cols = ["סוג עסקה", "שם בנק/מקור", "גובה מסגרת", "סכום מקורי", "יתרת חוב", "יתרה שלא שולמה"]
@@ -734,7 +764,8 @@ elif st.session_state.app_stage == "file_upload":
             st.rerun()
 
         if st.button("דלג והמשך לשאלון", key="skip_files_button", use_container_width=True):
-            st.session_state.df_bank_uploaded, st.session_state.df_credit_uploaded = pd.DataFrame(), pd.DataFrame()
+            st.session_state.df_bank_uploaded = empty_bank_df()
+            st.session_state.df_credit_uploaded = empty_credit_df()
             st.session_state.total_debt_from_credit_report = None
             st.session_state.app_stage = "questionnaire"
             st.session_state.questionnaire_stage = 0
@@ -898,7 +929,13 @@ elif st.session_state.app_stage == "summary":
     classification_details = st.session_state.classification_details
 
     # Define dataframes early for use in multiple places
-    df_bank = st.session_state.df_bank_uploaded.dropna(subset=['Date', 'Balance']).sort_values('Date')
+    df_bank = st.session_state.df_bank_uploaded.copy()
+    if {'Date','Balance'}.issubset(df_bank.columns):
+        df_bank = df_bank.dropna(subset=['Date', 'Balance']).sort_values('Date')
+    else:
+        df_bank = empty_bank_df()
+    if df_bank.empty:
+        st.info("לא נמצאו תנועות בנק תקינות להצגה (ייתכן שהדו\"ח קצר, או שהפורמט לא זוהה).")
     df_credit = st.session_state.df_credit_uploaded.copy()
 
 
